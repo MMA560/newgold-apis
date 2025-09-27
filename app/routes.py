@@ -8,9 +8,9 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Header, Query, Path, Body, status, Depends
 
 # Import services and schemas
-from services import product_service, order_service, customer_service
-from services import ProductServiceError, OrderServiceError, CustomerServiceError
-from schemas import (
+from app.services import product_service, order_service, customer_service
+from app.services import ProductServiceError, OrderServiceError, CustomerServiceError
+from app.schemas import (
     ProductResponse, 
     ProductUpdate, 
     OrderListResponse, 
@@ -144,7 +144,6 @@ async def update_product(
 
 @router.get(
     "/orders",
-    response_model=OrderListResponse,
     tags=["Orders"],
     summary="Get all orders",
     description="جلب جميع الطلبات مع التقسيم إلى صفحات",

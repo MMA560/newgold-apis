@@ -253,8 +253,7 @@ class OrderService:
                 data[key] = value
         
         # Ensure customer_info exists
-        if 'customer_info' not in data:
-            data['customer_info'] = {}
+        
         
         # Ensure items list exists
         if 'items' not in data:
