@@ -15,7 +15,7 @@ from app.database import get_firestore_client
 logger = logging.getLogger(__name__)
 
 # Collection names
-PRODUCTS_COLLECTION = "products"
+PRODUCTS_COLLECTION = "products" 
 ORDERS_COLLECTION = "orders"
 COUNTERS_COLLECTION = "counters"
 
