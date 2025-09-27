@@ -8,9 +8,9 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Header, Query, Path, Body, status, Depends
 
 # Import services and schemas
-from app.services import product_service, order_service, customer_service
-from app.services import ProductServiceError, OrderServiceError, CustomerServiceError
-from app.schemas import (
+from services import product_service, order_service, customer_service
+from services import ProductServiceError, OrderServiceError, CustomerServiceError
+from schemas import (
     ProductResponse, 
     ProductUpdate, 
     OrderListResponse, 
@@ -194,16 +194,19 @@ async def get_all_orders(
 )
 async def get_all_customers():
     """
-    API 4: جلب بيانات العملاء
+    API 4: جلب بيانات العملاء من الطلبات
+    يجمع بيانات العملاء من جميع الطلبات ويعرض إحصائيات كل عميل
     """
     try:
-        logger.info("Getting all customers")
+        logger.info("Getting all customers from orders")
         customers = await customer_service.get_all_customers()
+        
         response_data = {
             "customers": customers,
             "total_count": len(customers)
         }
-        logger.info(f"Successfully retrieved {len(customers)} customers")
+        
+        logger.info(f"Successfully retrieved {len(customers)} unique customers from orders")
         return response_data
         
     except CustomerServiceError as e:

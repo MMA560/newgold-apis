@@ -7,7 +7,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
 from google.cloud import firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
 
 # Import database function (assuming the database file is named 'database.py')
 from app.database import get_firestore_client
@@ -296,32 +295,62 @@ class OrderService:
         per_page: int = 10, 
         status: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Get all orders with full data"""
+        """Get all orders with full data - avoiding Firestore index requirements"""
         try:
             client = await self._get_client()
-            query = client.collection(ORDERS_COLLECTION)
+            collection = client.collection(ORDERS_COLLECTION)
+            
+            # استراتيجية تجنب مشكلة Index:
+            # إذا كان في status filter، نجلب كل البيانات ونفلتر في Python
+            # إذا مفيش filter، نستخدم order_by في Firestore
+            
+            all_docs = []
             
             if status:
-                query = query.where(filter=FieldFilter("status", "==", status))
+                # جلب جميع الطلبات وفلترة في Python لتجنب مشكلة Index
+                logger.info(f"Filtering by status '{status}' - fetching all orders for Python filtering")
+                async for doc in collection.stream():
+                    if doc.exists:
+                        doc_data = doc.to_dict()
+                        # فلترة بالـ status في Python
+                        if doc_data.get('status') == status:
+                            all_docs.append(doc)
+            else:
+                # لا يوجد filter، يمكن استخدام order_by مباشرة
+                logger.info("No status filter - using Firestore ordering")
+                try:
+                    # محاولة استخدام order_by
+                    query = collection.order_by("order_id", direction=firestore.Query.DESCENDING)
+                    async for doc in query.stream():
+                        if doc.exists:
+                            all_docs.append(doc)
+                except Exception as order_error:
+                    # في حالة فشل order_by، نجلب كل البيانات ونرتبها في Python
+                    logger.warning(f"Order by failed, falling back to Python sorting: {str(order_error)}")
+                    async for doc in collection.stream():
+                        if doc.exists:
+                            all_docs.append(doc)
             
-            # Order by order_id descending (newest first)
-            query = query.order_by("order_id", direction=firestore.Query.DESCENDING)
-            all_docs = await query.get()
+            # ترتيب البيانات في Python (حسب order_id تنازلي)
+            all_docs.sort(key=lambda doc: doc.to_dict().get('order_id', 0), reverse=True)
             
-            # Pagination
+            # تطبيق Pagination
             total_count = len(all_docs)
-            total_pages = (total_count + per_page - 1) // per_page
+            total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
             offset = (page - 1) * per_page
             limited_docs = all_docs[offset:offset + per_page]
             
+            # تحويل البيانات للشكل المطلوب
             orders = []
             for doc in limited_docs:
                 doc_data = doc.to_dict()
-                order_id = doc_data.get('order_id', int(doc.id))
+                order_id = doc_data.get('order_id', int(doc.id) if doc.id.isdigit() else 0)
                 
-                # Use formatting function to get detailed data
+                # استخدام دالة التنسيق للحصول على البيانات المفصلة
                 full_order_data = self._format_order_doc(doc, order_id)
                 orders.append(full_order_data)
+            
+            logger.info(f"Retrieved {len(orders)} orders (page {page}/{total_pages}, total: {total_count})")
             
             return {
                 'orders': orders,
@@ -362,30 +391,46 @@ class CustomerService:
             orders_collection = client.collection(ORDERS_COLLECTION)
             
             # Get all orders
-            all_orders = await orders_collection.get()
+            all_orders = []
+            async for doc in orders_collection.stream():
+                if doc.exists:
+                    all_orders.append(doc)
+            
+            logger.info(f"Found {len(all_orders)} total orders")
             
             # Group customers by phone number
             customers_dict = {}
             
             for order_doc in all_orders:
-                if not order_doc.exists:
-                    continue
-                    
                 order_data = order_doc.to_dict()
                 customer_info = order_data.get('customer_info', {})
+                
+                # Log للتأكد من البيانات
+                logger.debug(f"Processing order: {order_doc.id}, customer_info: {customer_info}")
                 
                 if not customer_info:
                     continue
                 
-                phone = customer_info.get('phone_number') or customer_info.get('phoneNumber')
-                name = customer_info.get('customer_name') or customer_info.get('customerName')
-                address = customer_info.get('full_address') or customer_info.get('fullAddress')
+                # جرب كل الاحتمالات للبحث عن رقم الهاتف واسم العميل
+                phone = (customer_info.get('phone_number') or 
+                        customer_info.get('phoneNumber') or
+                        customer_info.get('phone'))
                 
+                name = (customer_info.get('customer_name') or 
+                       customer_info.get('customerName') or
+                       customer_info.get('name'))
+                
+                address = (customer_info.get('full_address') or 
+                          customer_info.get('fullAddress') or
+                          customer_info.get('address'))
+                
+                # إذا مفيش رقم هاتف، تخطى الطلب
                 if not phone:
+                    logger.debug(f"Order {order_doc.id} has no phone number")
                     continue
                 
                 order_total = order_data.get('total', 0) or 0
-                order_date = order_data.get('order_date') or order_data.get('created_at')
+                order_date = order_data.get('order_date') or order_data.get('created_at') or order_data.get('orderDate')
                 
                 # Convert order_date to datetime if needed
                 if hasattr(order_date, 'timestamp'):
@@ -398,16 +443,16 @@ class CustomerService:
                 elif order_date is None:
                     order_date = datetime.now()
                 
+                # إنشاء أو تحديث بيانات العميل
                 if phone not in customers_dict:
                     customers_dict[phone] = {
-                        'customer_name': name,
+                        'customer_name': name or 'غير محدد',
                         'phone_number': phone,
-                        'full_address': address,
+                        'full_address': address or 'غير محدد',
                         'orders_count': 0,
                         'total_spent': 0.0,
                         'first_order_date': order_date,
                         'last_order_date': order_date,
-                        'orders': []
                     }
                 
                 customer = customers_dict[phone]
@@ -430,7 +475,7 @@ class CustomerService:
             customers_list = list(customers_dict.values())
             customers_list.sort(key=lambda x: x['total_spent'], reverse=True)
             
-            logger.info(f"Retrieved {len(customers_list)} customers")
+            logger.info(f"Retrieved {len(customers_list)} unique customers from {len(all_orders)} orders")
             return customers_list
             
         except Exception as e:
